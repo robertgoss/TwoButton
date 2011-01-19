@@ -16,18 +16,20 @@
 * 3. This notice may not be removed or altered from any source distribution.
 */
 
-package Box2D.Dynamics{
+package Box2D.Collision{
 	
 	
-public class b2TimeStep
+public class b2PairCallback
 {
-	public var dt:Number;			// time step
-	public var inv_dt:Number;		// inverse time step (0 if dt == 0).
-	public var dtRatio:Number;		// dt * inv_dt0
-	public var maxIterations:int;
-	public var warmStarting:Boolean;
-	public var positionCorrection:Boolean;
+	//virtual ~b2PairCallback() {}
+
+	// This returns the new pair user data.
+	public virtual function PairAdded(proxyUserData1:*, proxyUserData2:*):*{return null};
+
+	// This should free the pair's user data. In extreme circumstances, it is possible
+	// this will be called with null pairUserData because the pair never existed.
+	public virtual function PairRemoved(proxyUserData1:*, proxyUserData2:*, pairUserData:*) : void{};
 };
-
-
+	
+	
 }

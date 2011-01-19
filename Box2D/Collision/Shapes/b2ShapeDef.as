@@ -16,34 +16,41 @@
 * 3. This notice may not be removed or altered from any source distribution.
 */
 
-package Box2D.Dynamics.Contacts{
+package Box2D.Collision.Shapes{
+
 
 
 import Box2D.Common.Math.*;
-import Box2D.Collision.*;
-import Box2D.Dynamics.*;
 import Box2D.Common.*;
+import Box2D.Collision.Shapes.b2Shape;
 
 
-public class b2ContactConstraint
+
+/// A shape definition is used to construct a shape. This class defines an
+/// abstract shape definition. You can reuse shape definitions safely.
+public class b2ShapeDef
 {
-	public function b2ContactConstraint(){
-		points = new Array(b2Settings.b2_maxManifoldPoints);
-		for (var i:int = 0; i < b2Settings.b2_maxManifoldPoints; i++){
-			points[i] = new b2ContactConstraintPoint();
-		}
-		
-		
-	}
-	public var points:Array;
-	public var normal:b2Vec2=new b2Vec2();
-	public var manifold:b2Manifold;
-	public var body1:b2Body;
-	public var body2:b2Body;
-	public var friction:Number;
-	public var restitution:Number;
-	public var pointCount:int;
+	/// Holds the shape type for down-casting.
+	public var type:int = b2Shape.e_unknownShape;
+	
+	/// Use this to store application specify shape data.
+	public var userData:* = null;
+	
+	/// The shape's friction coefficient, usually in the range [0,1].
+	public var friction:Number = 0.2;
+	
+	/// The shape's restitution (elasticity) usually in the range [0,1].
+	public var restitution:Number = 0.0;
+	
+	/// The shape's density, usually in kg/m^2.
+	public var density:Number = 0.0;
+	
+	/// A sensor shape collects contact information but never generates a collision
+	/// response.
+	public var isSensor:Boolean = false;
+	
+	/// Contact filtering data.
+	public var filter: b2FilterData = new b2FilterData();
 };
-
 
 }

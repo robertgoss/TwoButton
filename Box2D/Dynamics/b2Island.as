@@ -25,9 +25,6 @@ import Box2D.Dynamics.Contacts.*;
 import Box2D.Dynamics.Joints.*;
 import Box2D.Collision.*;
 
-import Box2D.Common.b2internal;
-use namespace b2internal;
-
 
 /*
 Position Correction Notes
@@ -109,26 +106,14 @@ Baumgarte method in performance critical scenarios.
 */
 
 
-/**
-* @private
-*/
 public class b2Island
 {
-	
-	public function b2Island()
-	{
-		m_bodies = new Vector.<b2Body>();
-		m_contacts = new Vector.<b2Contact>();
-		m_joints = new Vector.<b2Joint>();
-	}
-	
-	public function Initialize(
+	public function b2Island(
 	bodyCapacity:int,
 	contactCapacity:int,
 	jointCapacity:int,
 	allocator:*,
-	listener:b2ContactListener,
-	contactSolver:b2ContactSolver):void
+	listener:b2ContactListener)
 	{
 		var i:int;
 		
@@ -141,16 +126,23 @@ public class b2Island
 		
 		m_allocator = allocator;
 		m_listener = listener;
-		m_contactSolver = contactSolver;
 		
-		for (i = m_bodies.length; i < bodyCapacity; i++)
+		//m_bodies = (b2Body**)allocator->Allocate(bodyCapacity * sizeof(b2Body*));
+		m_bodies = new Array(bodyCapacity);
+		for (i = 0; i < bodyCapacity; i++)
 			m_bodies[i] = null;
 		
-		for (i = m_contacts.length; i < contactCapacity; i++)
+		//m_contacts = (b2Contact**)allocator->Allocate(contactCapacity	 * sizeof(b2Contact*));
+		m_contacts = new Array(contactCapacity);
+		for (i = 0; i < contactCapacity; i++)
 			m_contacts[i] = null;
 		
-		for (i = m_joints.length; i < jointCapacity; i++)
+		//m_joints = (b2Joint**)allocator->Allocate(jointCapacity * sizeof(b2Joint*));
+		m_joints = new Array(jointCapacity);
+		for (i = 0; i < jointCapacity; i++)
 			m_joints[i] = null;
+		
+		m_positionIterationCount = 0;
 		
 	}
 	//~b2Island();
@@ -162,10 +154,9 @@ public class b2Island
 		m_jointCount = 0;
 	}
 
-	public function Solve(step:b2TimeStep, gravity:b2Vec2, allowSleep:Boolean) : void
+	public function Solve(step:b2TimeStep, gravity:b2Vec2, correctPositions:Boolean, allowSleep:Boolean) : void
 	{
 		var i:int;
-		var j:int;
 		var b:b2Body;
 		var joint:b2Joint;
 		
@@ -174,7 +165,7 @@ public class b2Island
 		{
 			b = m_bodies[i];
 			
-			if (b.GetType() != b2Body.b2_dynamicBody)
+			if (b.IsStatic())
 				continue;
 			
 			// Integrate velocities.
@@ -183,6 +174,10 @@ public class b2Island
 			b.m_linearVelocity.y += step.dt * (gravity.y + b.m_invMass * b.m_force.y);
 			b.m_angularVelocity += step.dt * b.m_invI * b.m_torque;
 			
+			// Reset forces.
+			b.m_force.SetZero();
+			b.m_torque = 0.0;
+			
 			// Apply damping.
 			// ODE: dv/dt + c * v = 0
 			// Solution: v(t) = v0 * exp(-c * t)
@@ -190,13 +185,33 @@ public class b2Island
 			// v2 = exp(-c * dt) * v1
 			// Taylor expansion:
 			// v2 = (1.0f - c * dt) * v1
-			b.m_linearVelocity.Multiply( b2Math.Clamp(1.0 - step.dt * b.m_linearDamping, 0.0, 1.0) );
-			b.m_angularVelocity *= b2Math.Clamp(1.0 - step.dt * b.m_angularDamping, 0.0, 1.0);
+			b.m_linearVelocity.Multiply( b2Math.b2Clamp(1.0 - step.dt * b.m_linearDamping, 0.0, 1.0) );
+			b.m_angularVelocity *= b2Math.b2Clamp(1.0 - step.dt * b.m_angularDamping, 0.0, 1.0);
+			
+			// Check for large velocities.
+			//if (b2Dot(b->m_linearVelocity, b->m_linearVelocity) > b2_maxLinearVelocitySquared)
+			if ((b.m_linearVelocity.LengthSquared()) > b2Settings.b2_maxLinearVelocitySquared)
+			{
+				b.m_linearVelocity.Normalize();
+				b.m_linearVelocity.x *= b2Settings.b2_maxLinearVelocity;
+				b.m_linearVelocity.y *= b2Settings.b2_maxLinearVelocity;
+			}
+			
+			if (b.m_angularVelocity * b.m_angularVelocity > b2Settings.b2_maxAngularVelocitySquared)
+			{
+				if (b.m_angularVelocity < 0.0)
+				{
+					b.m_angularVelocity = -b2Settings.b2_maxAngularVelocity;
+				}
+				else
+				{
+					b.m_angularVelocity = b2Settings.b2_maxAngularVelocity;
+				}
+			}
 		}
 		
-		m_contactSolver.Initialize(step, m_contacts, m_contactCount, m_allocator);
-		var contactSolver:b2ContactSolver = m_contactSolver;
-
+		var contactSolver:b2ContactSolver = new b2ContactSolver(step, m_contacts, m_contactCount, m_allocator);
+		
 		// Initialize velocity constraints.
 		contactSolver.InitVelocityConstraints(step);
 		
@@ -207,23 +222,18 @@ public class b2Island
 		}
 		
 		// Solve velocity constraints.
-		for (i = 0; i < step.velocityIterations; ++i)
-		{	
-			for (j = 0; j < m_jointCount; ++j)
+		for (i = 0; i < step.maxIterations; ++i)
+		{
+			contactSolver.SolveVelocityConstraints();
+			
+			for (var j:int = 0; j < m_jointCount; ++j)
 			{
 				joint = m_joints[j];
 				joint.SolveVelocityConstraints(step);
 			}
-			
-			contactSolver.SolveVelocityConstraints();
 		}
 		
 		// Post-solve (store impulses for warm starting).
-		for (i = 0; i < m_jointCount; ++i)
-		{
-			joint = m_joints[i];
-			joint.FinalizeVelocityConstraints();
-		}
 		contactSolver.FinalizeVelocityConstraints();
 		
 		// Integrate positions.
@@ -231,32 +241,8 @@ public class b2Island
 		{
 			b = m_bodies[i];
 			
-			if (b.GetType() == b2Body.b2_staticBody)
+			if (b.IsStatic())
 				continue;
-				
-			// Check for large velocities.
-			// b2Vec2 translation = step.dt * b.m_linearVelocity;
-			var translationX:Number = step.dt * b.m_linearVelocity.x;
-			var translationY:Number = step.dt * b.m_linearVelocity.y;
-			//if (b2Dot(translation, translation) > b2_maxTranslationSquared)
-			if ((translationX*translationX+translationY*translationY) > b2Settings.b2_maxTranslationSquared)
-			{
-				b.m_linearVelocity.Normalize();
-				b.m_linearVelocity.x *= b2Settings.b2_maxTranslation * step.inv_dt;
-				b.m_linearVelocity.y *= b2Settings.b2_maxTranslation * step.inv_dt;
-			}
-			var rotation:Number = step.dt * b.m_angularVelocity;
-			if (rotation * rotation > b2Settings.b2_maxRotationSquared)
-			{
-				if (b.m_angularVelocity < 0.0)
-				{
-					b.m_angularVelocity = -b2Settings.b2_maxRotation * step.inv_dt;
-				}
-				else
-				{
-					b.m_angularVelocity = b2Settings.b2_maxRotation * step.inv_dt;
-				}
-			}
 			
 			// Store positions for continuous collision.
 			b.m_sweep.c0.SetV(b.m_sweep.c);
@@ -274,22 +260,33 @@ public class b2Island
 			// Note: shapes are synchronized later.
 		}
 		
-		// Iterate over constraints.
-		for (i = 0; i < step.positionIterations; ++i)
+		if (correctPositions)
 		{
-			var contactsOkay:Boolean = contactSolver.SolvePositionConstraints(b2Settings.b2_contactBaumgarte);
-			
-			var jointsOkay:Boolean = true;
-			for (j = 0; j < m_jointCount; ++j)
+			// Initialize position constraints.
+			// Contacts don't need initialization.
+			for (i = 0; i < m_jointCount; ++i)
 			{
-				joint = m_joints[j];
-				var jointOkay:Boolean = joint.SolvePositionConstraints(b2Settings.b2_contactBaumgarte);
-				jointsOkay = jointsOkay && jointOkay;
+				joint = m_joints[i];
+				joint.InitPositionConstraints();
 			}
 			
-			if (contactsOkay && jointsOkay)
+			// Iterate over constraints.
+			for (m_positionIterationCount = 0; m_positionIterationCount < step.maxIterations; ++m_positionIterationCount)
 			{
-				break;
+				var contactsOkay:Boolean = contactSolver.SolvePositionConstraints(b2Settings.b2_contactBaumgarte);
+				
+				var jointsOkay:Boolean = true;
+				for (i = 0; i < m_jointCount; ++i)
+				{
+					joint = m_joints[i];
+					var jointOkay:Boolean = joint.SolvePositionConstraints();
+					jointsOkay = jointsOkay && jointOkay;
+				}
+				
+				if (contactsOkay && jointsOkay)
+				{
+					break;
+				}
 			}
 		}
 		
@@ -305,7 +302,7 @@ public class b2Island
 			for (i = 0; i < m_bodyCount; ++i)
 			{
 				b = m_bodies[i];
-				if (b.GetType() == b2Body.b2_staticBody)
+				if (b.m_invMass == 0.0)
 				{
 					continue;
 				}
@@ -318,7 +315,7 @@ public class b2Island
 				
 				if ((b.m_flags & b2Body.e_allowSleepFlag) == 0 ||
 					b.m_angularVelocity * b.m_angularVelocity > angTolSqr ||
-					b2Math.Dot(b.m_linearVelocity, b.m_linearVelocity) > linTolSqr)
+					b2Math.b2Dot(b.m_linearVelocity, b.m_linearVelocity) > linTolSqr)
 				{
 					b.m_sleepTime = 0.0;
 					minSleepTime = 0.0;
@@ -326,7 +323,7 @@ public class b2Island
 				else
 				{
 					b.m_sleepTime += step.dt;
-					minSleepTime = b2Math.Min(minSleepTime, b.m_sleepTime);
+					minSleepTime = b2Math.b2Min(minSleepTime, b.m_sleepTime);
 				}
 			}
 			
@@ -334,8 +331,10 @@ public class b2Island
 			{
 				for (i = 0; i < m_bodyCount; ++i)
 				{
-					b = m_bodies[i]; 
-					b.SetAwake(false);
+					b = m_bodies[i];
+					b.m_flags |= b2Body.e_sleepFlag;
+					b.m_linearVelocity.SetZero();
+					b.m_angularVelocity = 0.0;
 				}
 			}
 		}
@@ -345,29 +344,14 @@ public class b2Island
 	public function SolveTOI(subStep:b2TimeStep) : void
 	{
 		var i:int;
-		var j:int;
-		m_contactSolver.Initialize(subStep, m_contacts, m_contactCount, m_allocator);
-		var contactSolver:b2ContactSolver = m_contactSolver;
+		var contactSolver:b2ContactSolver = new b2ContactSolver(subStep, m_contacts, m_contactCount, m_allocator);
 		
-		// No warm starting is needed for TOI events because warm
-		// starting impulses were applied in the discrete solver.
-
-		// Warm starting for joints is off for now, but we need to
-		// call this function to compute Jacobians.
-		for (i = 0; i < m_jointCount;++i)
-		{
-			m_joints[i].InitVelocityConstraints(subStep);
-		}
-		
+		// No warm starting needed for TOI events.
 		
 		// Solve velocity constraints.
-		for (i = 0; i < subStep.velocityIterations; ++i)
+		for (i = 0; i < subStep.maxIterations; ++i)
 		{
 			contactSolver.SolveVelocityConstraints();
-			for (j = 0; j < m_jointCount;++j)
-			{
-				m_joints[j].SolveVelocityConstraints(subStep);
-			}
 		}
 		
 		// Don't store the TOI contact forces for warm starting
@@ -378,33 +362,8 @@ public class b2Island
 		{
 			var b:b2Body = m_bodies[i];
 			
-			if (b.GetType() == b2Body.b2_staticBody)
+			if (b.IsStatic())
 				continue;
-				
-			// Check for large velocities.
-			// b2Vec2 translation = subStep.dt * b.m_linearVelocity;
-			var translationX:Number = subStep.dt * b.m_linearVelocity.x;
-			var translationY:Number = subStep.dt * b.m_linearVelocity.y;
-			//if (b2Dot(translation, translation) > b2_maxTranslationSquared)
-			if ((translationX*translationX+translationY*translationY) > b2Settings.b2_maxTranslationSquared)
-			{
-				b.m_linearVelocity.Normalize();
-				b.m_linearVelocity.x *= b2Settings.b2_maxTranslation * subStep.inv_dt;
-				b.m_linearVelocity.y *= b2Settings.b2_maxTranslation * subStep.inv_dt;
-			}
-			
-			var rotation:Number = subStep.dt * b.m_angularVelocity;
-			if (rotation * rotation > b2Settings.b2_maxRotationSquared)
-			{
-				if (b.m_angularVelocity < 0.0)
-				{
-					b.m_angularVelocity = -b2Settings.b2_maxRotation * subStep.inv_dt;
-				}
-				else
-				{
-					b.m_angularVelocity = b2Settings.b2_maxRotation * subStep.inv_dt;
-				}
-			}
 			
 			// Store positions for continuous collision.
 			b.m_sweep.c0.SetV(b.m_sweep.c);
@@ -423,27 +382,23 @@ public class b2Island
 		
 		// Solve position constraints.
 		var k_toiBaumgarte:Number = 0.75;
-		for (i = 0; i < subStep.positionIterations; ++i)
+		for (i = 0; i < subStep.maxIterations; ++i)
 		{
 			var contactsOkay:Boolean = contactSolver.SolvePositionConstraints(k_toiBaumgarte);
-			var jointsOkay:Boolean = true;
-			for (j = 0; j < m_jointCount;++j)
-			{
-				var jointOkay:Boolean = m_joints[j].SolvePositionConstraints(b2Settings.b2_contactBaumgarte);
-				jointsOkay = jointsOkay && jointOkay;
-			}
-			
-			if (contactsOkay && jointsOkay)
+			if (contactsOkay)
 			{
 				break;
 			}
 		}
+		
 		Report(contactSolver.m_constraints);
 	}
 
-	private static var s_impulse:b2ContactImpulse = new b2ContactImpulse();
-	public function Report(constraints:Vector.<b2ContactConstraint>) : void
+	static private var s_reportCR:b2ContactResult = new b2ContactResult();
+	public function Report(constraints:Array) : void
 	{
+		var tMat:b2Mat22;
+		var tVec:b2Vec2;
 		if (m_listener == null)
 		{
 			return;
@@ -453,13 +408,31 @@ public class b2Island
 		{
 			var c:b2Contact = m_contacts[i];
 			var cc:b2ContactConstraint = constraints[ i ];
-			
-			for (var j:int = 0; j < cc.pointCount; ++j)
+			var cr:b2ContactResult = s_reportCR;
+			cr.shape1 = c.m_shape1;
+			cr.shape2 = c.m_shape2;
+			var b1:b2Body = cr.shape1.m_body;
+			var manifoldCount:int = c.m_manifoldCount;
+			var manifolds:Array = c.GetManifolds();
+			for (var j:int = 0; j < manifoldCount; ++j)
 			{
-				s_impulse.normalImpulses[j] = cc.points[j].normalImpulse;
-				s_impulse.tangentImpulses[j] = cc.points[j].tangentImpulse;
+				var manifold:b2Manifold = manifolds[ j ];
+				cr.normal.SetV( manifold.normal );
+				for (var k:int = 0; k < manifold.pointCount; ++k)
+				{
+					var point:b2ManifoldPoint = manifold.points[ k ];
+					var ccp:b2ContactConstraintPoint = cc.points[ k ];
+					cr.position = b1.GetWorldPoint(point.localPoint1);
+					
+					// TOI constraint results are not stored, so get
+					// the result from the constraint.
+					cr.normalImpulse = ccp.normalImpulse;
+					cr.tangentImpulse = ccp.tangentImpulse;
+					cr.id.key = point.id.key;
+					
+					m_listener.Result(cr);
+				}
 			}
-			m_listener.PostSolve(c, s_impulse);
 		}
 	}
 	
@@ -467,7 +440,6 @@ public class b2Island
 	public function AddBody(body:b2Body) : void
 	{
 		//b2Settings.b2Assert(m_bodyCount < m_bodyCapacity);
-		body.m_islandIndex = m_bodyCount;
 		m_bodies[m_bodyCount++] = body;
 	}
 
@@ -483,21 +455,22 @@ public class b2Island
 		m_joints[m_jointCount++] = joint;
 	}
 
-	private var m_allocator:*;
-	private var m_listener:b2ContactListener;
-	private var m_contactSolver:b2ContactSolver;
+	public var m_allocator:*;
+	public var m_listener:b2ContactListener;
 
-	b2internal var m_bodies:Vector.<b2Body>;
-	b2internal var m_contacts:Vector.<b2Contact>;
-	b2internal var m_joints:Vector.<b2Joint>;
+	public var m_bodies:Array;
+	public var m_contacts:Array;
+	public var m_joints:Array;
 
-	b2internal var m_bodyCount:int;
-	b2internal var m_jointCount:int;
-	b2internal var m_contactCount:int;
+	public var m_bodyCount:int;
+	public var m_jointCount:int;
+	public var m_contactCount:int;
 
-	private var m_bodyCapacity:int;
-	b2internal var m_contactCapacity:int;
-	b2internal var m_jointCapacity:int;
+	public var m_bodyCapacity:int;
+	public var m_contactCapacity:int;
+	public var m_jointCapacity:int;
+
+	public var m_positionIterationCount:int;
 	
 };
 

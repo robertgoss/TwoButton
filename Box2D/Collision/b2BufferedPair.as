@@ -16,18 +16,13 @@
 * 3. This notice may not be removed or altered from any source distribution.
 */
 
-package Box2D.Dynamics{
+package Box2D.Collision{
 	
 	
-public class b2TimeStep
-{
-	public var dt:Number;			// time step
-	public var inv_dt:Number;		// inverse time step (0 if dt == 0).
-	public var dtRatio:Number;		// dt * inv_dt0
-	public var maxIterations:int;
-	public var warmStarting:Boolean;
-	public var positionCorrection:Boolean;
-};
-
-
+public class b2BufferedPair{
+	public var proxyId1:uint;
+	public var proxyId2:uint;
+}
+	
+	
 }

@@ -16,18 +16,25 @@
 * 3. This notice may not be removed or altered from any source distribution.
 */
 
-package Box2D.Dynamics{
-	
-	
-public class b2TimeStep
-{
-	public var dt:Number;			// time step
-	public var inv_dt:Number;		// inverse time step (0 if dt == 0).
-	public var dtRatio:Number;		// dt * inv_dt0
-	public var maxIterations:int;
-	public var warmStarting:Boolean;
-	public var positionCorrection:Boolean;
-};
+package Box2D.Collision.Shapes{
 
+
+
+import Box2D.Common.Math.*;
+import Box2D.Collision.Shapes.*;
+
+
+/// This structure is used to build circle shapes.
+public class b2CircleDef extends b2ShapeDef
+{
+	public function b2CircleDef()
+	{
+		type = b2Shape.e_circleShape;
+		radius = 1.0;
+	}
+
+	public var localPosition:b2Vec2 = new b2Vec2(0.0, 0.0);
+	public var radius:Number;
+};
 
 }

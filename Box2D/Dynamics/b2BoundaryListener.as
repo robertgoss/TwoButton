@@ -16,37 +16,25 @@
 * 3. This notice may not be removed or altered from any source distribution.
 */
 
-package Box2D.Dynamics.Joints{
+package Box2D.Dynamics{
 
 
-import Box2D.Common.Math.*;
+import Box2D.Collision.*;
+import Box2D.Collision.Shapes.*;
+import Box2D.Dynamics.Contacts.*;
 import Box2D.Dynamics.*;
+import Box2D.Common.Math.*;
+import Box2D.Common.*;
 
 
-/// Joint definitions are used to construct joints.
-public class b2JointDef
+/// This is called when a body's shape passes outside of the world boundary.
+public class b2BoundaryListener
 {
-	
-	public function b2JointDef()
-	{
-		type = b2Joint.e_unknownJoint;
-		userData = null;
-		body1 = null;
-		body2 = null;
-		collideConnected = false;
-	}
 
-	/// The joint type is set automatically for concrete joint types.
-	public var type:int;
-	/// Use this to attach application specific data to your joints.
-	public var userData:*;
-	/// The first attached body.
-	public var body1:b2Body;
-	/// The second attached body.
-	public var body2:b2Body;
-	/// Set this flag to true if the attached bodies should collide.
-	public var collideConnected:Boolean;
+	/// This is called for each body that leaves the world boundary.
+	/// @warning you can't modify the world inside this callback.
+	public virtual function Violation(body:b2Body) : void{};
 	
-}
+};
 
 }

@@ -23,9 +23,6 @@ import Box2D.Common.*;
 import Box2D.Collision.*;
 import Box2D.Common.Math.*;
 
-import Box2D.Common.b2internal;
-use namespace b2internal;
-
 
 /*
 This broad phase uses the Sweep and Prune algorithm as described in:
@@ -47,26 +44,31 @@ Bullet (http:/www.bulletphysics.com).
 // - no broadphase is perfect and neither is this one: it is not great for huge
 //   worlds (use a multi-SAP instead), it is not great for large objects.
 
-/**
-* @private
-*/
-public class b2BroadPhase implements IBroadPhase
+public class b2BroadPhase
 {
 //public:
-	public function b2BroadPhase(worldAABB:b2AABB){
+	public function b2BroadPhase(worldAABB:b2AABB, callback:b2PairCallback){
 		//b2Settings.b2Assert(worldAABB.IsValid());
 		var i:int;
 		
-		m_pairManager.Initialize(this);
+		m_pairManager.Initialize(this, callback);
 		
 		m_worldAABB = worldAABB;
 		
 		m_proxyCount = 0;
 		
+		// query results
+		for (i = 0; i < b2Settings.b2_maxProxies; i++){
+			m_queryResults[i] = 0;
+		}
+		
 		// bounds array
-		m_bounds = new Vector.<Vector.<b2Bound> >();
+		m_bounds = new Array(2);
 		for (i = 0; i < 2; i++){
-			m_bounds[i] = new Vector.<b2Bound>();
+			m_bounds[i] = new Array(2*b2Settings.b2_maxProxies);
+			for (var j:int = 0; j < 2*b2Settings.b2_maxProxies; j++){
+				m_bounds[i][j] = new b2Bound();
+			}
 		}
 		
 		//b2Vec2 d = worldAABB.upperBound - worldAABB.lowerBound;
@@ -75,6 +77,24 @@ public class b2BroadPhase implements IBroadPhase
 		
 		m_quantizationFactor.x = b2Settings.USHRT_MAX / dX;
 		m_quantizationFactor.y = b2Settings.USHRT_MAX / dY;
+		
+		var tProxy:b2Proxy;
+		for (i = 0; i < b2Settings.b2_maxProxies - 1; ++i)
+		{
+			tProxy = new b2Proxy();
+			m_proxyPool[i] = tProxy;
+			tProxy.SetNext(i + 1);
+			tProxy.timeStamp = 0;
+			tProxy.overlapCount = b2_invalid;
+			tProxy.userData = null;
+		}
+		tProxy = new b2Proxy();
+		m_proxyPool[int(b2Settings.b2_maxProxies-1)] = tProxy;
+		tProxy.SetNext(b2Pair.b2_nullProxy);
+		tProxy.timeStamp = 0;
+		tProxy.overlapCount = b2_invalid;
+		tProxy.userData = null;
+		m_freeProxy = 0;
 		
 		m_timeStamp = 1;
 		m_queryResultCount = 0;
@@ -101,82 +121,119 @@ public class b2BroadPhase implements IBroadPhase
 		d2X -= aabb.upperBound.x;
 		d2Y -= aabb.upperBound.y;
 		
-		dX = b2Math.Max(dX, d2X);
-		dY = b2Math.Max(dY, d2Y);
+		dX = b2Math.b2Max(dX, d2X);
+		dY = b2Math.b2Max(dY, d2Y);
 		
-		return b2Math.Max(dX, dY) < 0.0;
+		return b2Math.b2Max(dX, dY) < 0.0;
+	}
+	
+	// Get a single proxy. Returns NULL if the id is invalid.
+	public function GetProxy(proxyId:int):b2Proxy{
+		var proxy: b2Proxy = m_proxyPool[proxyId];
+		if (proxyId == b2Pair.b2_nullProxy || proxy.IsValid() == false)
+		{
+			return null;
+		}
+		
+		return proxy;
 	}
 
 	// Create and destroy proxies. These call Flush first.
-	public function CreateProxy(aabb:b2AABB, userData:*):*{
+	public function CreateProxy(aabb:b2AABB, userData:*):uint{
 		var index:uint;
 		var proxy:b2Proxy;
-		var i:int;
-		var j:int;
 		
 		//b2Settings.b2Assert(m_proxyCount < b2_maxProxies);
 		//b2Settings.b2Assert(m_freeProxy != b2Pair.b2_nullProxy);
 		
-		if (!m_freeProxy)
-		{
-			// As all proxies are allocated, m_proxyCount == m_proxyPool.length
-			m_freeProxy = m_proxyPool[m_proxyCount] = new b2Proxy();
-			m_freeProxy.next = null;
-			m_freeProxy.timeStamp = 0;
-			m_freeProxy.overlapCount = b2_invalid;
-			m_freeProxy.userData = null;
-			
-			for (i = 0; i < 2; i++)
-			{
-				j = m_proxyCount * 2;
-				m_bounds[i][j++] = new b2Bound();
-				m_bounds[i][j] = new b2Bound();
-			}
-			
-		}
-		
-		proxy = m_freeProxy;
-		m_freeProxy = proxy.next;
+		var proxyId:uint = m_freeProxy;
+		proxy = m_proxyPool[ proxyId ];
+		m_freeProxy = proxy.GetNext();
 		
 		proxy.overlapCount = 0;
 		proxy.userData = userData;
 		
 		var boundCount:uint = 2 * m_proxyCount;
 		
-		var lowerValues:Vector.<Number> = new Vector.<Number>();
-		var upperValues:Vector.<Number> = new Vector.<Number>();
+		var lowerValues:Array = new Array();
+		var upperValues:Array = new Array();
 		ComputeBounds(lowerValues, upperValues, aabb);
 		
 		for (var axis:int = 0; axis < 2; ++axis)
 		{
-			var bounds:Vector.<b2Bound> = m_bounds[axis];
+			var bounds:Array = m_bounds[axis];
 			var lowerIndex:uint;
 			var upperIndex:uint;
-			var lowerIndexOut:Vector.<uint> = new Vector.<uint>();
-			lowerIndexOut.push(lowerIndex);
-			var upperIndexOut:Vector.<uint> = new Vector.<uint>();
-			upperIndexOut.push(upperIndex);
-			QueryAxis(lowerIndexOut, upperIndexOut, lowerValues[axis], upperValues[axis], bounds, boundCount, axis);
+			var lowerIndexOut:Array = [lowerIndex];
+			var upperIndexOut:Array = [upperIndex];
+			Query(lowerIndexOut, upperIndexOut, lowerValues[axis], upperValues[axis], bounds, boundCount, axis);
 			lowerIndex = lowerIndexOut[0];
 			upperIndex = upperIndexOut[0];
 			
-			bounds.splice(upperIndex, 0, bounds[bounds.length - 1]);
-			bounds.length--;
-			bounds.splice(lowerIndex, 0, bounds[bounds.length - 1]);
-			bounds.length--;
+			// Replace memmove calls
+			//memmove(bounds + upperIndex + 2, bounds + upperIndex, (edgeCount - upperIndex) * sizeof(b2Bound));
+			var tArr:Array = new Array();
+			var j:int;
+			var tEnd:int = boundCount - upperIndex
+			var tBound1:b2Bound;
+			var tBound2:b2Bound;
+			var tBoundAS3:b2Bound;
+			// make temp array
+			for (j = 0; j < tEnd; j++){
+				tArr[j] = new b2Bound();
+				tBound1 = tArr[j];
+				tBound2 = bounds[int(upperIndex+j)];
+				tBound1.value = tBound2.value;
+				tBound1.proxyId = tBound2.proxyId;
+				tBound1.stabbingCount = tBound2.stabbingCount;
+			}
+			// move temp array back in to bounds
+			tEnd = tArr.length;
+			var tIndex:int = upperIndex+2;
+			for (j = 0; j < tEnd; j++){
+				//bounds[tIndex+j] = tArr[j];
+				tBound2 = tArr[j];
+				tBound1 = bounds[int(tIndex+j)]
+				tBound1.value = tBound2.value;
+				tBound1.proxyId = tBound2.proxyId;
+				tBound1.stabbingCount = tBound2.stabbingCount;
+			}
+			//memmove(bounds + lowerIndex + 1, bounds + lowerIndex, (upperIndex - lowerIndex) * sizeof(b2Bound));
+			// make temp array
+			tArr = new Array();
+			tEnd = upperIndex - lowerIndex;
+			for (j = 0; j < tEnd; j++){
+				tArr[j] = new b2Bound();
+				tBound1 = tArr[j];
+				tBound2 = bounds[int(lowerIndex+j)];
+				tBound1.value = tBound2.value;
+				tBound1.proxyId = tBound2.proxyId;
+				tBound1.stabbingCount = tBound2.stabbingCount;
+			}
+			// move temp array back in to bounds
+			tEnd = tArr.length;
+			tIndex = lowerIndex+1;
+			for (j = 0; j < tEnd; j++){
+				//bounds[tIndex+j] = tArr[j];
+				tBound2 = tArr[j];
+				tBound1 = bounds[int(tIndex+j)]
+				tBound1.value = tBound2.value;
+				tBound1.proxyId = tBound2.proxyId;
+				tBound1.stabbingCount = tBound2.stabbingCount;
+			}
 			
 			// The upper index has increased because of the lower bound insertion.
 			++upperIndex;
 			
 			// Copy in the new bounds.
-			var tBound1:b2Bound = bounds[lowerIndex];
-			var tBound2:b2Bound = bounds[upperIndex];
+			tBound1 = bounds[lowerIndex];
+			tBound2 = bounds[upperIndex];
 			tBound1.value = lowerValues[axis];
-			tBound1.proxy = proxy;
+			tBound1.proxyId = proxyId;
 			tBound2.value = upperValues[axis];
-			tBound2.proxy = proxy;
+			tBound2.proxyId = proxyId;
 			
-			var tBoundAS3:b2Bound = bounds[int(lowerIndex-1)];
+			tBoundAS3 = bounds[int(lowerIndex-1)];
 			tBound1.stabbingCount = lowerIndex == 0 ? 0 : tBoundAS3.stabbingCount;
 			tBoundAS3 = bounds[int(upperIndex-1)];
 			tBound2.stabbingCount = tBoundAS3.stabbingCount;
@@ -192,7 +249,7 @@ public class b2BroadPhase implements IBroadPhase
 			for (index = lowerIndex; index < boundCount + 2; ++index)
 			{
 				tBound1 = bounds[index];
-				var proxy2:b2Proxy = tBound1.proxy;
+				var proxy2:b2Proxy = m_proxyPool[ tBound1.proxyId ];
 				if (tBound1.IsLower())
 				{
 					proxy2.lowerBounds[axis] = index;
@@ -208,33 +265,37 @@ public class b2BroadPhase implements IBroadPhase
 		
 		//b2Settings.b2Assert(m_queryResultCount < b2Settings.b2_maxProxies);
 		
-		for (i = 0; i < m_queryResultCount; ++i)
+		for (var i:int = 0; i < m_queryResultCount; ++i)
 		{
 			//b2Settings.b2Assert(m_queryResults[i] < b2_maxProxies);
 			//b2Settings.b2Assert(m_proxyPool[m_queryResults[i]].IsValid());
 			
-			m_pairManager.AddBufferedPair(proxy, m_queryResults[i]);
+			m_pairManager.AddBufferedPair(proxyId, m_queryResults[i]);
 		}
+		
+		m_pairManager.Commit();
 		
 		// Prepare for next query.
 		m_queryResultCount = 0;
 		IncrementTimeStamp();
 		
-		return proxy;
+		return proxyId;
 	}
 	
-	public function DestroyProxy(proxy_:*) : void {
-		var proxy:b2Proxy = proxy_ as b2Proxy;
+	public function DestroyProxy(proxyId:uint) : void{
 		var tBound1:b2Bound;
 		var tBound2:b2Bound;
 		
+		//b2Settings.b2Assert(0 < m_proxyCount && m_proxyCount <= b2_maxProxies);
+		
+		var proxy:b2Proxy = m_proxyPool[ proxyId ];
 		//b2Settings.b2Assert(proxy.IsValid());
 		
 		var boundCount:int = 2 * m_proxyCount;
 		
 		for (var axis:int = 0; axis < 2; ++axis)
 		{
-			var bounds:Vector.<b2Bound> = m_bounds[axis];
+			var bounds:Array = m_bounds[axis];
 			
 			var lowerIndex:uint = proxy.lowerBounds[axis];
 			var upperIndex:uint = proxy.upperBounds[axis];
@@ -243,18 +304,61 @@ public class b2BroadPhase implements IBroadPhase
 			tBound2 = bounds[upperIndex];
 			var upperValue:uint = tBound2.value;
 			
-			bounds.splice(upperIndex, 1);
-			bounds.splice(lowerIndex, 1);
-			bounds.push(tBound1);
-			bounds.push(tBound2);
-			
+			// replace memmove calls
+			//memmove(bounds + lowerIndex, bounds + lowerIndex + 1, (upperIndex - lowerIndex - 1) * sizeof(b2Bound));
+			var tArr:Array = new Array();
+			var j:int;
+			var tEnd:int = upperIndex - lowerIndex - 1;
+			// make temp array
+			for (j = 0; j < tEnd; j++){
+				tArr[j] = new b2Bound();
+				tBound1 = tArr[j];
+				tBound2 = bounds[int(lowerIndex+1+j)];
+				tBound1.value = tBound2.value;
+				tBound1.proxyId = tBound2.proxyId;
+				tBound1.stabbingCount = tBound2.stabbingCount;
+			}
+			// move temp array back in to bounds
+			tEnd = tArr.length;
+			var tIndex:int = lowerIndex;
+			for (j = 0; j < tEnd; j++){
+				//bounds[tIndex+j] = tArr[j];
+				tBound2 = tArr[j];
+				tBound1 = bounds[int(tIndex+j)]
+				tBound1.value = tBound2.value;
+				tBound1.proxyId = tBound2.proxyId;
+				tBound1.stabbingCount = tBound2.stabbingCount;
+			}
+			//memmove(bounds + upperIndex-1, bounds + upperIndex + 1, (edgeCount - upperIndex - 1) * sizeof(b2Bound));
+			// make temp array
+			tArr = new Array();
+			tEnd = boundCount - upperIndex - 1;
+			for (j = 0; j < tEnd; j++){
+				tArr[j] = new b2Bound();
+				tBound1 = tArr[j];
+				tBound2 = bounds[int(upperIndex+1+j)];
+				tBound1.value = tBound2.value;
+				tBound1.proxyId = tBound2.proxyId;
+				tBound1.stabbingCount = tBound2.stabbingCount;
+			}
+			// move temp array back in to bounds
+			tEnd = tArr.length;
+			tIndex = upperIndex-1;
+			for (j = 0; j < tEnd; j++){
+				//bounds[tIndex+j] = tArr[j];
+				tBound2 = tArr[j];
+				tBound1 = bounds[int(tIndex+j)]
+				tBound1.value = tBound2.value;
+				tBound1.proxyId = tBound2.proxyId;
+				tBound1.stabbingCount = tBound2.stabbingCount;
+			}
 			
 			// Fix bound indices.
-			var tEnd:int = boundCount - 2;
+			tEnd = boundCount - 2;
 			for (var index:uint = lowerIndex; index < tEnd; ++index)
 			{
 				tBound1 = bounds[index];
-				var proxy2:b2Proxy = tBound1.proxy;
+				var proxy2:b2Proxy = m_proxyPool[ tBound1.proxyId ];
 				if (tBound1.IsLower())
 				{
 					proxy2.lowerBounds[axis] = index;
@@ -275,8 +379,7 @@ public class b2BroadPhase implements IBroadPhase
 			
 			// Query for pairs to be removed. lowerIndex and upperIndex are not needed.
 			// make lowerIndex and upper output using an array and do this for others if compiler doesn't pick them up
-			var ignore:Vector.<uint> = new Vector.<uint>();
-			QueryAxis(ignore, ignore, lowerValue, upperValue, bounds, boundCount - 2, axis);
+			Query([0], [0], lowerValue, upperValue, bounds, boundCount - 2, axis);
 		}
 		
 		//b2Settings.b2Assert(m_queryResultCount < b2Settings.b2_maxProxies);
@@ -285,8 +388,10 @@ public class b2BroadPhase implements IBroadPhase
 		{
 			//b2Settings.b2Assert(m_proxyPool[m_queryResults[i]].IsValid());
 			
-			m_pairManager.RemoveBufferedPair(proxy, m_queryResults[i]);
+			m_pairManager.RemoveBufferedPair(proxyId, m_queryResults[i]);
 		}
+		
+		m_pairManager.Commit();
 		
 		// Prepare for next query.
 		m_queryResultCount = 0;
@@ -300,19 +405,17 @@ public class b2BroadPhase implements IBroadPhase
 		proxy.upperBounds[0] = b2_invalid;
 		proxy.upperBounds[1] = b2_invalid;
 		
-		proxy.next = m_freeProxy;
-		m_freeProxy = proxy;
+		proxy.SetNext(m_freeProxy);
+		m_freeProxy = proxyId;
 		--m_proxyCount;
 	}
 
 
 	// Call MoveProxy as many times as you like, then when you are done
 	// call Commit to finalized the proxy pairs (for your time step).
-	public function MoveProxy(proxy_:*, aabb:b2AABB, displacement:b2Vec2) : void {
-		var proxy:b2Proxy = proxy_ as b2Proxy;
-		
-		var as3arr:Vector.<uint>;
-		var as3int:int;
+	public function MoveProxy(proxyId:uint, aabb:b2AABB) : void{
+		var as3arr: Array;
+		var as3int: int;
 		
 		var axis:uint;
 		var index:uint;
@@ -322,7 +425,7 @@ public class b2BroadPhase implements IBroadPhase
 		var nextProxyId:uint;
 		var nextProxy:b2Proxy;
 		
-		if (proxy == null)
+		if (proxyId == b2Pair.b2_nullProxy || b2Settings.b2_maxProxies <= proxyId)
 		{
 			//b2Settings.b2Assert(false);
 			return;
@@ -336,6 +439,7 @@ public class b2BroadPhase implements IBroadPhase
 		
 		var boundCount:uint = 2 * m_proxyCount;
 		
+		var proxy:b2Proxy = m_proxyPool[ proxyId ];
 		// Get new bound values
 		var newValues:b2BoundValues = new b2BoundValues();
 		ComputeBounds(newValues.lowerValues, newValues.upperValues, aabb);
@@ -352,7 +456,7 @@ public class b2BroadPhase implements IBroadPhase
 		
 		for (axis = 0; axis < 2; ++axis)
 		{
-			var bounds:Vector.<b2Bound> = m_bounds[axis];
+			var bounds:Array = m_bounds[axis];
 			
 			var lowerIndex:uint = proxy.lowerBounds[axis];
 			var upperIndex:uint = proxy.upperBounds[axis];
@@ -381,15 +485,16 @@ public class b2BroadPhase implements IBroadPhase
 					bound = bounds[index];
 					prevBound = bounds[int(index - 1)];
 					
-					var prevProxy:b2Proxy = prevBound.proxy;
+					var prevProxyId:uint = prevBound.proxyId;
+					var prevProxy:b2Proxy = m_proxyPool[ prevBound.proxyId ];
 					
 					prevBound.stabbingCount++;
 					
 					if (prevBound.IsUpper() == true)
 					{
-						if (TestOverlapBound(newValues, prevProxy))
+						if (TestOverlap(newValues, prevProxy))
 						{
-							m_pairManager.AddBufferedPair(proxy, prevProxy);
+							m_pairManager.AddBufferedPair(proxyId, prevProxyId);
 						}
 						
 						//prevProxy.upperBounds[axis]++;
@@ -422,7 +527,7 @@ public class b2BroadPhase implements IBroadPhase
 					//bound = prevEdge;
 					//prevEdge = temp;
 					bound.Swap(prevBound);
-					//b2Math.Swap(bound, prevEdge);
+					//b2Math.b2Swap(bound, prevEdge);
 					--index;
 				}
 			}
@@ -435,15 +540,16 @@ public class b2BroadPhase implements IBroadPhase
 				{
 					bound = bounds[ index ];
 					nextBound = bounds[ int(index + 1) ];
-					nextProxy = nextBound.proxy;
+					nextProxyId = nextBound.proxyId;
+					nextProxy = m_proxyPool[ nextProxyId ];
 					
 					nextBound.stabbingCount++;
 					
 					if (nextBound.IsLower() == true)
 					{
-						if (TestOverlapBound(newValues, nextProxy))
+						if (TestOverlap(newValues, nextProxy))
 						{
-							m_pairManager.AddBufferedPair(proxy, nextProxy);
+							m_pairManager.AddBufferedPair(proxyId, nextProxyId);
 						}
 						
 						//nextProxy.lowerBounds[axis]--;
@@ -476,7 +582,7 @@ public class b2BroadPhase implements IBroadPhase
 					//bound = nextEdge;
 					//nextEdge = temp;
 					bound.Swap(nextBound);
-					//b2Math.Swap(bound, nextEdge);
+					//b2Math.b2Swap(bound, nextEdge);
 					index++;
 				}
 			}
@@ -494,15 +600,16 @@ public class b2BroadPhase implements IBroadPhase
 					bound = bounds[ index ];
 					nextBound = bounds[ int(index + 1) ];
 					
-					nextProxy = nextBound.proxy;
+					nextProxyId = nextBound.proxyId;
+					nextProxy = m_proxyPool[ nextProxyId ];
 					
 					nextBound.stabbingCount--;
 					
 					if (nextBound.IsUpper())
 					{
-						if (TestOverlapBound(oldValues, nextProxy))
+						if (TestOverlap(oldValues, nextProxy))
 						{
-							m_pairManager.RemoveBufferedPair(proxy, nextProxy);
+							m_pairManager.RemoveBufferedPair(proxyId, nextProxyId);
 						}
 						
 						//nextProxy.upperBounds[axis]--;
@@ -535,7 +642,7 @@ public class b2BroadPhase implements IBroadPhase
 					//bound = nextEdge;
 					//nextEdge = temp;
 					bound.Swap(nextBound);
-					//b2Math.Swap(bound, nextEdge);
+					//b2Math.b2Swap(bound, nextEdge);
 					index++;
 				}
 			}
@@ -549,15 +656,16 @@ public class b2BroadPhase implements IBroadPhase
 					bound = bounds[index];
 					prevBound = bounds[int(index - 1)];
 					
-					prevProxy = prevBound.proxy;
+					prevProxyId = prevBound.proxyId;
+					prevProxy = m_proxyPool[ prevProxyId ];
 					
 					prevBound.stabbingCount--;
 					
 					if (prevBound.IsLower() == true)
 					{
-						if (TestOverlapBound(oldValues, prevProxy))
+						if (TestOverlap(oldValues, prevProxy))
 						{
-							m_pairManager.RemoveBufferedPair(proxy, prevProxy);
+							m_pairManager.RemoveBufferedPair(proxyId, prevProxyId);
 						}
 						
 						//prevProxy.lowerBounds[axis]++;
@@ -590,94 +698,47 @@ public class b2BroadPhase implements IBroadPhase
 					//bound = prevEdge;
 					//prevEdge = temp;
 					bound.Swap(prevBound);
-					//b2Math.Swap(bound, prevEdge);
+					//b2Math.b2Swap(bound, prevEdge);
 					index--;
 				}
 			}
 		}
 	}
 	
-	public function UpdatePairs(callback:Function) : void{
-		m_pairManager.Commit(callback);
+	public function Commit() : void{
+		m_pairManager.Commit();
 	}
 
-	public function TestOverlap(proxyA:*, proxyB:*):Boolean
-	{
-		var proxyA_:b2Proxy = proxyA as b2Proxy;
-		var proxyB_:b2Proxy = proxyB as b2Proxy;
-		if ( proxyA_.lowerBounds[0] > proxyB_.upperBounds[0]) return false;
-		if ( proxyB_.lowerBounds[0] > proxyA_.upperBounds[0]) return false;
-		if ( proxyA_.lowerBounds[1] > proxyB_.upperBounds[1]) return false;
-		if ( proxyB_.lowerBounds[1] > proxyA_.upperBounds[1]) return false;
-		return true;
-	}
-	
-	/**
-	 * Get user data from a proxy. Returns null if the proxy is invalid.
-	 */
-	public function GetUserData(proxy:*):*
-	{
-		return (proxy as b2Proxy).userData;
-	}
-	
-	/**
-	 * Get the AABB for a proxy.
-	 */
-	public function GetFatAABB(proxy_:*):b2AABB
-	{
-		var aabb:b2AABB = new b2AABB();
-		var proxy:b2Proxy = proxy_ as b2Proxy;
-		aabb.lowerBound.x = m_worldAABB.lowerBound.x +  m_bounds[0][proxy.lowerBounds[0]].value  / m_quantizationFactor.x;
-		aabb.lowerBound.y = m_worldAABB.lowerBound.y +  m_bounds[1][proxy.lowerBounds[1]].value  / m_quantizationFactor.y;
-		aabb.upperBound.x = m_worldAABB.lowerBound.x +  m_bounds[0][proxy.upperBounds[0]].value  / m_quantizationFactor.x;
-		aabb.upperBound.y = m_worldAABB.lowerBound.y +  m_bounds[1][proxy.upperBounds[1]].value  / m_quantizationFactor.y;
-		return aabb;
-	}
-	
-	/**
-	 * Get the number of proxies.
-	 */
-	public function GetProxyCount():int
-	{
-		return m_proxyCount;
-	}
-		
-	
-	/**
-	 * Query an AABB for overlapping proxies. The callback class
-	 * is called for each proxy that overlaps the supplied AABB.
-	 */
-	public function Query(callback:Function, aabb:b2AABB):void
-	{
-		var lowerValues:Vector.<Number> = new Vector.<Number>();
-		var upperValues:Vector.<Number> = new Vector.<Number>();
+	// Query an AABB for overlapping proxies, returns the user data and
+	// the count, up to the supplied maximum count.
+	public function QueryAABB(aabb:b2AABB, userData:*, maxCount:int):int{
+		var lowerValues:Array = new Array();
+		var upperValues:Array = new Array();
 		ComputeBounds(lowerValues, upperValues, aabb);
 		
 		var lowerIndex:uint;
 		var upperIndex:uint;
-		var lowerIndexOut:Vector.<uint> = new Vector.<uint>();
-		lowerIndexOut.push(lowerIndex);
-		var upperIndexOut:Vector.<uint> = new Vector.<uint>();
-		upperIndexOut.push(upperIndex);
-		QueryAxis(lowerIndexOut, upperIndexOut, lowerValues[0], upperValues[0], m_bounds[0], 2*m_proxyCount, 0);
-		QueryAxis(lowerIndexOut, upperIndexOut, lowerValues[1], upperValues[1], m_bounds[1], 2*m_proxyCount, 1);
+		var lowerIndexOut:Array = [lowerIndex];
+		var upperIndexOut:Array = [upperIndex];
+		Query(lowerIndexOut, upperIndexOut, lowerValues[0], upperValues[0], m_bounds[0], 2*m_proxyCount, 0);
+		Query(lowerIndexOut, upperIndexOut, lowerValues[1], upperValues[1], m_bounds[1], 2*m_proxyCount, 1);
 		
 		//b2Settings.b2Assert(m_queryResultCount < b2Settings.b2_maxProxies);
 		
-		// TODO: Don't be lazy, transform QueryAxis to directly call callback
-		for (var i:int = 0; i < m_queryResultCount; ++i)
+		var count:int = 0;
+		for (var i:int = 0; i < m_queryResultCount && count < maxCount; ++i, ++count)
 		{
-			var proxy:b2Proxy =  m_queryResults[i];
+			//b2Settings.b2Assert(m_queryResults[i] < b2Settings.b2_maxProxies);
+			var proxy:b2Proxy = m_proxyPool[ m_queryResults[i] ];
 			//b2Settings.b2Assert(proxy.IsValid());
-			if (!callback(proxy))
-			{
-				break;
-			}
+			userData[i] = proxy.userData;
 		}
 		
 		// Prepare for next query.
 		m_queryResultCount = 0;
 		IncrementTimeStamp();
+		
+		return count;
 	}
 
 	public function Validate() : void{
@@ -688,7 +749,7 @@ public class b2BroadPhase implements IBroadPhase
 		
 		for (var axis:int = 0; axis < 2; ++axis)
 		{
-			var bounds:Vector.<b2Bound> = m_bounds[axis];
+			var bounds:b2Bound = m_bounds[axis];
 			
 			var boundCount:uint = 2 * m_proxyCount;
 			var stabbingCount:uint = 0;
@@ -717,194 +778,27 @@ public class b2BroadPhase implements IBroadPhase
 		
 	}
 
-	public function Rebalance(iterations:int):void
-	{
-		// Do nothing
-	}
-
-	
-	/**
-	 * @inheritDoc
-	 */
-	public function RayCast(callback:Function, input:b2RayCastInput):void
-	{
-		var subInput:b2RayCastInput = new  b2RayCastInput();
-		subInput.p1.SetV(input.p1);
-		subInput.p2.SetV(input.p2);
-		subInput.maxFraction = input.maxFraction;
-		
-		
-		var dx:Number = (input.p2.x-input.p1.x)*m_quantizationFactor.x;
-		var dy:Number = (input.p2.y-input.p1.y)*m_quantizationFactor.y;
-		
-		var sx:int = dx<-Number.MIN_VALUE ? -1 : (dx>Number.MIN_VALUE ? 1 : 0);
-		var sy:int = dy<-Number.MIN_VALUE ? -1 : (dy>Number.MIN_VALUE ? 1 : 0);
-		
-		//b2Settings.b2Assert(sx!=0||sy!=0);
-		
-		var p1x:Number = m_quantizationFactor.x * (input.p1.x - m_worldAABB.lowerBound.x);
-		var p1y:Number = m_quantizationFactor.y * (input.p1.y - m_worldAABB.lowerBound.y);
-		
-		var startValues:Array = new Array();
-		var startValues2:Array = new Array();
-		startValues[0]=uint(p1x) & (b2Settings.USHRT_MAX - 1);
-		startValues[1]=uint(p1y) & (b2Settings.USHRT_MAX - 1);
-		startValues2[0]=startValues[0]+1;
-		startValues2[1]=startValues[1]+1;
-		
-		var startIndices:Array = new Array();
-		
-		var xIndex:int;
-		var yIndex:int;
-		
-		var proxy:b2Proxy;
-		
-		
-		//First deal with all the proxies that contain segment.p1
-		var lowerIndex:uint;
-		var upperIndex:uint;
-		var lowerIndexOut:Vector.<uint> = new Vector.<uint>(); 
-		lowerIndexOut.push(lowerIndex);
-		var upperIndexOut:Vector.<uint> = new Vector.<uint>();
-		upperIndexOut.push(upperIndex);
-		QueryAxis(lowerIndexOut, upperIndexOut, startValues[0], startValues2[0], m_bounds[0], 2*m_proxyCount, 0);
-		if(sx>=0)	xIndex = upperIndexOut[0]-1;
-		else		xIndex = lowerIndexOut[0];
-		QueryAxis(lowerIndexOut, upperIndexOut, startValues[1], startValues2[1], m_bounds[1], 2*m_proxyCount, 1);
-		if(sy>=0)	yIndex = upperIndexOut[0]-1;
-		else		yIndex = lowerIndexOut[0];
-			
-		// Callback for starting proxies:
-		for (var i:int = 0; i < m_queryResultCount; i++) {
-			subInput.maxFraction = callback(m_queryResults[i], subInput);
-		}
-		
-		//Now work through the rest of the segment
-		for (;; )
-		{
-			var xProgress:Number = 0;
-			var yProgress:Number = 0;
-			//Move on to next bound
-			xIndex += sx >= 0?1: -1;
-			if(xIndex<0||xIndex>=m_proxyCount*2)
-				break;
-			if(sx!=0){
-				xProgress = (m_bounds[0][xIndex].value - p1x) / dx;
-			}
-			//Move on to next bound
-			yIndex += sy >= 0?1: -1;
-			if(yIndex<0||yIndex>=m_proxyCount*2)
-				break;
-			if(sy!=0){
-				yProgress = (m_bounds[1][yIndex].value - p1y) / dy;	
-			}
-			for (;; )
-			{	
-				if(sy==0||(sx!=0&&xProgress<yProgress)){
-					if(xProgress>subInput.maxFraction)
-						break;
-					
-					//Check that we are entering a proxy, not leaving
-					if(sx>0?m_bounds[0][xIndex].IsLower():m_bounds[0][xIndex].IsUpper()){
-						//Check the other axis of the proxy
-						proxy = m_bounds[0][xIndex].proxy;
-						if(sy>=0){
-							if(proxy.lowerBounds[1]<=yIndex-1&&proxy.upperBounds[1]>=yIndex){
-								//Add the proxy
-								subInput.maxFraction = callback(proxy, subInput);
-							}
-						}else{
-							if(proxy.lowerBounds[1]<=yIndex&&proxy.upperBounds[1]>=yIndex+1){
-								//Add the proxy
-								subInput.maxFraction = callback(proxy, subInput);
-							}
-						}
-					}
-					
-					//Early out
-					if(subInput.maxFraction==0)
-						break;
-					
-					//Move on to the next bound
-					if(sx>0){
-						xIndex++;
-						if(xIndex==m_proxyCount*2)
-							break;
-					}else{
-						xIndex--;
-						if(xIndex<0)
-							break;
-					}
-					xProgress = (m_bounds[0][xIndex].value - p1x) / dx;
-				}else{
-					if(yProgress>subInput.maxFraction)
-						break;
-					
-					//Check that we are entering a proxy, not leaving
-					if(sy>0?m_bounds[1][yIndex].IsLower():m_bounds[1][yIndex].IsUpper()){
-						//Check the other axis of the proxy
-						proxy = m_bounds[1][yIndex].proxy;
-						if(sx>=0){
-							if(proxy.lowerBounds[0]<=xIndex-1&&proxy.upperBounds[0]>=xIndex){
-								//Add the proxy
-								subInput.maxFraction = callback(proxy, subInput);
-							}
-						}else{
-							if(proxy.lowerBounds[0]<=xIndex&&proxy.upperBounds[0]>=xIndex+1){
-								//Add the proxy
-								subInput.maxFraction = callback(proxy, subInput);
-							}
-						}
-					}
-					
-					//Early out
-					if(subInput.maxFraction==0)
-						break;
-					
-					//Move on to the next bound
-					if(sy>0){
-						yIndex++;
-						if(yIndex==m_proxyCount*2)
-							break;
-					}else{
-						yIndex--;
-						if(yIndex<0)
-							break;
-					}
-					yProgress = (m_bounds[1][yIndex].value - p1y) / dy;
-				}
-			}
-			break;
-		}
-		
-		// Prepare for next query.
-		m_queryResultCount = 0;
-		IncrementTimeStamp();
-		
-		return;
-	}
-	
 //private:
-	private function ComputeBounds(lowerValues:Vector.<Number>, upperValues:Vector.<Number>, aabb:b2AABB) : void
+	private function ComputeBounds(lowerValues:Array, upperValues:Array, aabb:b2AABB) : void
 	{
-		//b2Settings.b2Assert(aabb.upperBound.x >= aabb.lowerBound.x);
-		//b2Settings.b2Assert(aabb.upperBound.y >= aabb.lowerBound.y);
+		//b2Settings.b2Assert(aabb.upperBound.x > aabb.lowerBound.x);
+		//b2Settings.b2Assert(aabb.upperBound.y > aabb.lowerBound.y);
 		
-		//var minVertex:b2Vec2 = b2Math.ClampV(aabb.minVertex, m_worldAABB.minVertex, m_worldAABB.maxVertex);
+		//var minVertex:b2Vec2 = b2Math.b2ClampV(aabb.minVertex, m_worldAABB.minVertex, m_worldAABB.maxVertex);
 		var minVertexX:Number = aabb.lowerBound.x;
 		var minVertexY:Number = aabb.lowerBound.y;
-		minVertexX = b2Math.Min(minVertexX, m_worldAABB.upperBound.x);
-		minVertexY = b2Math.Min(minVertexY, m_worldAABB.upperBound.y);
-		minVertexX = b2Math.Max(minVertexX, m_worldAABB.lowerBound.x);
-		minVertexY = b2Math.Max(minVertexY, m_worldAABB.lowerBound.y);
+		minVertexX = b2Math.b2Min(minVertexX, m_worldAABB.upperBound.x);
+		minVertexY = b2Math.b2Min(minVertexY, m_worldAABB.upperBound.y);
+		minVertexX = b2Math.b2Max(minVertexX, m_worldAABB.lowerBound.x);
+		minVertexY = b2Math.b2Max(minVertexY, m_worldAABB.lowerBound.y);
 		
-		//var maxVertex:b2Vec2 = b2Math.ClampV(aabb.maxVertex, m_worldAABB.minVertex, m_worldAABB.maxVertex);
+		//var maxVertex:b2Vec2 = b2Math.b2ClampV(aabb.maxVertex, m_worldAABB.minVertex, m_worldAABB.maxVertex);
 		var maxVertexX:Number = aabb.upperBound.x;
 		var maxVertexY:Number = aabb.upperBound.y;
-		maxVertexX = b2Math.Min(maxVertexX, m_worldAABB.upperBound.x);
-		maxVertexY = b2Math.Min(maxVertexY, m_worldAABB.upperBound.y);
-		maxVertexX = b2Math.Max(maxVertexX, m_worldAABB.lowerBound.x);
-		maxVertexY = b2Math.Max(maxVertexY, m_worldAABB.lowerBound.y);
+		maxVertexX = b2Math.b2Min(maxVertexX, m_worldAABB.upperBound.x);
+		maxVertexY = b2Math.b2Min(maxVertexY, m_worldAABB.upperBound.y);
+		maxVertexX = b2Math.b2Max(maxVertexX, m_worldAABB.lowerBound.x);
+		maxVertexY = b2Math.b2Max(maxVertexY, m_worldAABB.lowerBound.y);
 		
 		// Bump lower bounds downs and upper bounds up. This ensures correct sorting of
 		// lower/upper bounds that would have equal values.
@@ -921,7 +815,7 @@ public class b2BroadPhase implements IBroadPhase
 		
 		for (var axis:int = 0; axis < 2; ++axis)
 		{
-			var bounds:Vector.<b2Bound> = m_bounds[axis];
+			var bounds:Array = m_bounds[axis];
 			
 			//b2Settings.b2Assert(p1.lowerBounds[axis] < 2 * m_proxyCount);
 			//b2Settings.b2Assert(p1.upperBounds[axis] < 2 * m_proxyCount);
@@ -942,11 +836,11 @@ public class b2BroadPhase implements IBroadPhase
 		return true;
 	}
 	
-	public function TestOverlapBound(b:b2BoundValues, p:b2Proxy):Boolean
+	public function TestOverlap(b:b2BoundValues, p:b2Proxy):Boolean
 	{
 		for (var axis:int = 0; axis < 2; ++axis)
 		{
-			var bounds:Vector.<b2Bound> = m_bounds[axis];
+			var bounds:Array = m_bounds[axis];
 			
 			//b2Settings.b2Assert(p.lowerBounds[axis] < 2 * m_proxyCount);
 			//b2Settings.b2Assert(p.upperBounds[axis] < 2 * m_proxyCount);
@@ -963,7 +857,7 @@ public class b2BroadPhase implements IBroadPhase
 		return true;
 	}
 
-	private function QueryAxis(lowerQueryOut:Vector.<uint>, upperQueryOut:Vector.<uint>, lowerValue:uint, upperValue:uint, bounds:Vector.<b2Bound>, boundCount:uint, axis:int) : void{
+	private function Query(lowerQueryOut:Array, upperQueryOut:Array, lowerValue:uint, upperValue:uint, bounds:Array, boundCount:uint, axis:int) : void{
 		
 		var lowerQuery:uint = BinarySearch(bounds, boundCount, lowerValue);
 		var upperQuery:uint = BinarySearch(bounds, boundCount, upperValue);
@@ -976,7 +870,7 @@ public class b2BroadPhase implements IBroadPhase
 			bound = bounds[j];
 			if (bound.IsLower())
 			{
-				IncrementOverlapCount(bound.proxy);
+				IncrementOverlapCount(bound.proxyId);
 			}
 		}
 		
@@ -995,10 +889,10 @@ public class b2BroadPhase implements IBroadPhase
 				bound = bounds[i];
 				if (bound.IsLower())
 				{
-					var proxy:b2Proxy = bound.proxy;
+					var proxy:b2Proxy = m_proxyPool[ bound.proxyId ];
 					if (lowerQuery <= proxy.upperBounds[axis])
 					{
-						IncrementOverlapCount(bound.proxy);
+						IncrementOverlapCount(bound.proxyId);
 						--s;
 					}
 				}
@@ -1010,7 +904,9 @@ public class b2BroadPhase implements IBroadPhase
 		upperQueryOut[0] = upperQuery;
 	}
 
-	private function IncrementOverlapCount(proxy:b2Proxy) : void{
+
+	private function IncrementOverlapCount(proxyId:uint) : void{
+		var proxy:b2Proxy = m_proxyPool[ proxyId ];
 		if (proxy.timeStamp < m_timeStamp)
 		{
 			proxy.timeStamp = m_timeStamp;
@@ -1020,14 +916,14 @@ public class b2BroadPhase implements IBroadPhase
 		{
 			proxy.overlapCount = 2;
 			//b2Settings.b2Assert(m_queryResultCount < b2Settings.b2_maxProxies);
-			m_queryResults[m_queryResultCount] = proxy;
+			m_queryResults[m_queryResultCount] = proxyId;
 			++m_queryResultCount;
 		}
 	}
 	private function IncrementTimeStamp() : void{
 		if (m_timeStamp == b2Settings.USHRT_MAX)
 		{
-			for (var i:uint = 0; i < m_proxyPool.length; ++i)
+			for (var i:uint = 0; i < b2Settings.b2_maxProxies; ++i)
 			{
 				(m_proxyPool[i] as b2Proxy).timeStamp = 0;
 			}
@@ -1038,22 +934,22 @@ public class b2BroadPhase implements IBroadPhase
 			++m_timeStamp;
 		}
 	}
-	
-	b2internal var m_pairManager:b2PairManager = new b2PairManager();
 
-	b2internal var m_proxyPool:Array = new Array();
-	private var m_freeProxy:b2Proxy;
+//public:
+	public var m_pairManager:b2PairManager = new b2PairManager();
 
-	b2internal var m_bounds:Vector.<Vector.<b2Bound> > ;
+	public var m_proxyPool:Array = new Array(b2Settings.b2_maxPairs);
+	public var m_freeProxy:uint;
 
-	private var m_querySortKeys:Array = new Array();
-	private var m_queryResults:Array = new Array();
-	private var m_queryResultCount:int;
+	public var m_bounds:Array = new Array(2*b2Settings.b2_maxProxies);
 
-	b2internal var m_worldAABB:b2AABB;
-	b2internal var m_quantizationFactor:b2Vec2 = new b2Vec2();
-	b2internal var m_proxyCount:int;
-	private var m_timeStamp:uint;
+	public var m_queryResults:Array = new Array(b2Settings.b2_maxProxies);
+	public var m_queryResultCount:int;
+
+	public var m_worldAABB:b2AABB;
+	public var m_quantizationFactor:b2Vec2 = new b2Vec2();
+	public var m_proxyCount:int;
+	public var m_timeStamp:uint;
 
 	static public var s_validate:Boolean = false;
 	
@@ -1061,7 +957,7 @@ public class b2BroadPhase implements IBroadPhase
 	static public const b2_nullEdge:uint = b2Settings.USHRT_MAX;
 
 
-	static public function BinarySearch(bounds:Vector.<b2Bound>, count:int, value:uint):uint
+	static public function BinarySearch(bounds:Array, count:int, value:uint):uint
 	{
 		var low:int = 0;
 		var high:int = count - 1;
