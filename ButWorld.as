@@ -34,6 +34,11 @@ package
       {
 	rope.kill(button);
       }
+
+      if(Input.mouseWheel)
+      {
+	rope.shorten(Math.min(0,Input.mouseWheelDelta))
+      }
     }
   } 
 } 

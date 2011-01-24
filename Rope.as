@@ -74,6 +74,17 @@ package
       }
     }
 
+    public function shorten(contract:Number):void
+    {
+      contract = contract * -4.0;
+      if(rope_length-contract < 10)
+	return;
+      var twist:Number = rope_length * Math.tan(angle_vel);
+      angle_vel = Math.atan(twist/(rope_length-contract));
+      rope_length = rope_length - contract;
+      img.scaleY = rope_length/20.0;
+    }
+
     public function flip():void
     {
       angle_vel = -angle_vel;
