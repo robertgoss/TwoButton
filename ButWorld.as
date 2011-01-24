@@ -30,10 +30,11 @@ package
     override public function update() : void
     {
       super.update();
+      rope.constrain(button)
       world.collide_with(button);
       if(Input.mousePressed)
       {
-	rope.setup();
+	rope.setup(button);
       }
       if(Input.mouseReleased)
       {

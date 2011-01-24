@@ -56,6 +56,12 @@ package
       return y+radius_;
     }
 
+    public function set_centre(n_x:Number,n_y:Number):void
+    {
+      x = n_x-radius_;
+      y = n_y-radius_;
+    }
+
     public function radius():Number
     {
       return radius_;
