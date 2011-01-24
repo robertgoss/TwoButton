@@ -17,9 +17,8 @@ package
       rope = new Rope();
 
       button = new Button(rope);
-      add(button);
-
       add(rope);
+      add(button);
     } 
 
     override public function update() : void
