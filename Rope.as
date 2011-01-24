@@ -14,6 +14,8 @@ package
     private var alive:Boolean;
     private var rope_length:Number;
 
+    private var angle:Number;
+    private var angle_vel:Number;
 
     public function Rope()
     {
@@ -25,31 +27,47 @@ package
 
     public function setup(button:Button):void
     {
-      alive = true;
       x=Input.mouseX;
       y=Input.mouseY;
       var but_x:Number = button.centre_x();
       var but_y:Number = button.centre_y();
-      rope_length = Math.sqrt((but_x-x)*(but_x-x) + (but_y-y)*(but_y-y));
+      if(x==but_x && y==but_y)
+	return
+      alive = true;
+      var diff_x:Number = but_x-x;
+      var diff_y:Number = but_y-y;
+      rope_length = Math.sqrt(diff_x*diff_x + diff_y*diff_y);
+      button.constrain();
+      angle = Math.atan2(diff_x,diff_y)
+      diff_x = diff_x+button.vel_x;
+      diff_y = diff_y+button.vel_y;
+      angle_vel = Math.atan2(diff_x,diff_y)-angle;
     }
 
-    public function kill():void
+    public function kill(button:Button):void
     {
       alive = false;
+      var but_x:Number=Math.sin(angle)*rope_length;
+      var but_y:Number=Math.cos(angle)*rope_length;
+      var but_vel_x:Number=Math.sin(angle+angle_vel)*rope_length - but_x;
+      var but_vel_y:Number=Math.cos(angle+angle_vel)*rope_length - but_y;
+      button.unconstrain(but_vel_x,but_vel_y);
     }
 
     public function constrain(button:Button):void
     {
       if(alive)
       {
-	var but_x:Number = button.centre_x();
-	var but_y:Number = button.centre_y();
-	var cur_length:Number = Math.sqrt((but_x-x)*(but_x-x) + (but_y-y)*(but_y-y));
-	var ratio:Number = rope_length/cur_length;
-	var new_x:Number = x + ((but_x-x)*ratio);
-	var new_y:Number = y + ((but_y-y)*ratio);
-	button.set_centre(new_x,new_y);
+	angle = angle+angle_vel;
+	var but_x:Number = (Math.sin(angle)*rope_length)+x;
+	var but_y:Number = (Math.cos(angle)*rope_length)+y;
+	button.set_centre(but_x,but_y);
       }
+    }
+
+    public function flip():void
+    {
+      angle_vel = -angle_vel;
     }
   }
 }

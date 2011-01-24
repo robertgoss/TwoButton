@@ -13,19 +13,14 @@ package
     { 
       world = new BlockWorld();
       add(world);
-      setupPhysics();
 
-      button = new Button()
+      rope = new Rope();
+
+      button = new Button(rope);
       add(button);
 
-      rope = new Rope()
       add(rope);
     } 
-
-    public function setupPhysics() : void
-    {
-
-    }
 
     override public function update() : void
     {
@@ -38,7 +33,7 @@ package
       }
       if(Input.mouseReleased)
       {
-	rope.kill();
+	rope.kill(button);
       }
     }
   } 
