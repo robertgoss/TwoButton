@@ -29,6 +29,13 @@ package
       graphic.visible = false;
     }
 
+    public function reset():void
+    {
+      alive = false;
+      rope_length = 0;
+      img.scaleX = 0.25;
+      graphic.visible = false;
+    }
 
     public function setup(button:Button):void
     {
@@ -68,9 +75,12 @@ package
       {
 	img.angle = angle * 180.0 / 3.14;
 	angle = angle+angle_vel;
+	angle_vel = angle_vel*0.996;
 	var but_x:Number = (Math.sin(angle)*rope_length)+x;
 	var but_y:Number = (Math.cos(angle)*rope_length)+y;
 	button.set_centre(but_x,but_y);
+	//Gravity
+	angle_vel = angle_vel + (0.002 * Math.sin(angle+3.14));
       }
     }
 

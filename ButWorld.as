@@ -7,7 +7,7 @@ package
   { 
     private var rope:Rope;
     private var button:Button;
-    private var world:BlockWorld;
+    public var world:BlockWorld;
 
     public function ButWorld() 
     { 
@@ -19,7 +19,15 @@ package
       button = new Button(rope);
       add(rope);
       add(button);
+
+      add(new Splash("INTRO",this));
     } 
+
+    public function reset():void
+    {
+      button.reset();
+      rope.reset();
+    }
 
     override public function update() : void
     {

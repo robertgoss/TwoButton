@@ -21,6 +21,7 @@ package
       //High Bounds
       blockArray.push(new Block(10,-1000,20,2000));
       blockArray.push(new Block(630,-1000,20,2000));
+      blockArray.push(new Block(320,-1470,640,20));
 
       //Catcher
       blockArray.push(new Block(445,130,10,60));

@@ -43,12 +43,29 @@ package
       old_y_ = y;
       if(constrained==false)
       {
+	vel_x = vel_x * 0.996
+	vel_y = vel_y * 0.996
+	vel_y+=0.03;
 	x = x+vel_x;
 	y = y+vel_y;
       }
 
       collide_x = false;
       collide_y = false;
+    }
+
+    public function reset():void
+    {
+      old_x_ = x = 100;
+      old_y_ = y = 100;
+
+      vel_x = 1;
+      vel_y = 0.4;
+      
+      radius_ = 10;
+
+      collide_x = false;
+      constrained = false;
     }
 
     public function old_x():Number
