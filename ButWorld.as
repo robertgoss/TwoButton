@@ -8,6 +8,7 @@ package
     private var rope:Rope;
     private var button:Button;
     public var world:BlockWorld;
+    private var vic:Victory;
 
     public function ButWorld() 
     { 
@@ -19,6 +20,9 @@ package
       button = new Button(rope);
       add(rope);
       add(button);
+
+      vic = new Victory();
+      add(vic);
 
       add(new Splash("INTRO",this));
     } 
@@ -46,6 +50,11 @@ package
       if(Input.mouseWheel)
       {
 	rope.shorten(Math.min(0,Input.mouseWheelDelta))
+      }
+
+      if(vic.check_condition(button))
+      {
+	add(new Splash("VIC",this));
       }
     }
   } 
