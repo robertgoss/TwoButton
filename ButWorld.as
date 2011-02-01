@@ -38,6 +38,7 @@ package
       super.update();
       rope.constrain(button)
       world.collide_with(button);
+      rope.set_length(button);
       if(Input.mousePressed)
       {
 	rope.setup(button);

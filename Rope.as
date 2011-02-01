@@ -95,6 +95,13 @@ package
       img.scaleY = rope_length/20.0;
     }
 
+    public function set_length(button:Button):void
+    {
+      var diff_x:Number = button.centre_x()-x;
+      var diff_y:Number = button.centre_y()-y;
+      rope_length = Math.sqrt(diff_x*diff_x + diff_y*diff_y);
+    }
+
     public function flip():void
     {
       angle_vel = -angle_vel;
