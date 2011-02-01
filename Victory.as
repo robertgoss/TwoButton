@@ -35,7 +35,7 @@ package
 
     override public function render():void
     {
-      Draw.rect(x,y,width_,hieght_,0xFF4444,0.4);
+      Draw.rect(x,y,width_,hieght_,0x4444FF,0.4);
     }
   }
 }
