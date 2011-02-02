@@ -2,6 +2,7 @@ package
 {
   import net.flashpunk.Entity; 
   import net.flashpunk.graphics.Image;
+  import net.flashpunk.Sfx;
 
   public class Gem extends Entity
   {
@@ -10,6 +11,11 @@ package
 
     [Embed(source = 'assets/gem_1.png')] 
     private const GEM:Class;
+
+    [Embed(source = 'assets/shatter.mp3')] 
+    private const SHATTER:Class;
+
+    public var shatter_sound:Sfx = new Sfx(SHATTER);
 
     private var door:GemDoor;
 
@@ -32,6 +38,8 @@ package
       y = 2000;
       
       door.shatter();
+
+      shatter_sound.play();
     }
 
     public function gem_door():GemDoor
