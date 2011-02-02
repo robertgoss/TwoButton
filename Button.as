@@ -2,12 +2,19 @@ package
 { 
   import net.flashpunk.Entity; 
   import net.flashpunk.graphics.Image;
+  import net.flashpunk.Sfx;
+
 
   public class Button extends Entity 
   { 
 
     [Embed(source = 'assets/button.png')] 
     private const PLAYER:Class;
+
+    [Embed(source = 'assets/sound6.mp3')] 
+    private const BOUNCE:Class;
+
+    public var bounce:Sfx = new Sfx(BOUNCE);
 
     private var old_x_:Number;
     private var old_y_:Number;
@@ -122,6 +129,7 @@ package
       collide_x = true;
       if(collide_y==false)
       {
+	bounce.play();
 	rope_.flip();
       }
     }
@@ -137,6 +145,7 @@ package
       collide_y = true;
       if(collide_x==false)
       {
+	bounce.play();
 	rope_.flip();
       }
     }
