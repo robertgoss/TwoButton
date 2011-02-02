@@ -33,9 +33,12 @@ package
 
     public function reset():void
     {
+      kill_blocks();
+      kill_gems();
       block_world = block_world.next_level();
       gem_world = gem_world.next_level();
       add_gems();
+      add(block_world)
       button.reset();
       rope.reset();
     }
@@ -47,6 +50,21 @@ package
       {
 	add(gemArray[i]);
 	add(gemArray[i].gem_door());
+      }
+    }
+
+    public function kill_blocks():void
+    {
+      remove(block_world)
+    }
+
+    public function kill_gems():void
+    {
+      var gemArray:Array = gem_world.gems();
+      for(var i:int=0;i<gemArray.length;i++)
+      {
+	remove(gemArray[i]);
+	remove(gemArray[i].gem_door());
       }
     }
 
